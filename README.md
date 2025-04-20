@@ -17,6 +17,8 @@ A modern web application built with Next.js for visualizing and managing QSO (am
 
 ## Getting Started
 
+# You can now run this as a  container on dockerhub: dkingshott/qso-map:latest
+
 1. Clone the repository:
 ```bash
 git clone [your-repository-url]
