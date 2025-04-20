@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ComposableMap, Geographies, Geography, Line, Marker } from "react-simple-maps"
-import { format, parse, isWithinInterval } from "date-fns"
+import * as d3 from "d3"
+import { format } from "date-fns"
 import { Info } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -73,41 +73,16 @@ function gridToLatLon(grid: string): [number, number] | null {
   }
 }
 
-// Function to parse lat/lon strings from ADIF
-function parseLatLon(lat?: string, lon?: string): [number, number] | null {
-  if (!lat || !lon) return null
-
-  try {
-    // Parse formats like "N045 26.250" to decimal degrees
-    const latDir = lat.charAt(0)
-    const latDeg = Number.parseFloat(lat.substring(1, 4))
-    const latMin = Number.parseFloat(lat.substring(5))
-    let latDecimal = latDeg + latMin / 60
-    if (latDir === "S") latDecimal = -latDecimal
-
-    const lonDir = lon.charAt(0)
-    const lonDeg = Number.parseFloat(lon.substring(1, 4))
-    const lonMin = Number.parseFloat(lon.substring(5))
-    let lonDecimal = lonDeg + lonMin / 60
-    if (lonDir === "W") lonDecimal = -lonDecimal
-
-    return [latDecimal, lonDecimal]
-  } catch (e) {
-    return null
-  }
-}
-
-export function QsoMap() {
+export function QsoMapD3() {
   const router = useRouter()
+  const svgRef = useRef<SVGSVGElement>(null)
   const [qsos, setQsos] = useState<QSO[]>([])
   const [dateRange, setDateRange] = useState<[Date, Date]>([new Date(0), new Date()])
   const [currentRange, setCurrentRange] = useState<[Date, Date]>([new Date(0), new Date()])
-  const [sliderValue, setSliderValue] = useState<number[]>([100])
+  const [sliderValue, setSliderValue] = useState<number[]>([0])
   const [selectedQso, setSelectedQso] = useState<QSO | null>(null)
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null)
-
-  // Use a more reliable TopoJSON source
-  const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json"
+  const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
 
   useEffect(() => {
     // Get QSO data from sessionStorage
@@ -225,6 +200,125 @@ export function QsoMap() {
     return null
   }
 
+  // Update dimensions on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (svgRef.current) {
+        const { width, height } = svgRef.current.getBoundingClientRect()
+        setDimensions({ width, height })
+      }
+    }
+
+    window.addEventListener('resize', handleResize)
+    handleResize() // Initial size
+
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Render the map using D3
+  useEffect(() => {
+    if (!svgRef.current || filteredQsos.length === 0) return
+
+    // Clear previous content
+    d3.select(svgRef.current).selectAll("*").remove()
+
+    // Create SVG group for the map
+    const svg = d3.select(svgRef.current)
+    const g = svg.append("g")
+
+    // Create a projection that better fits the world map
+    const projection = d3.geoMercator()
+      .scale(200)  // Increased scale for better detail
+      .center([0, 30])  // Adjusted center to focus on northern hemisphere
+      .translate([dimensions.width / 2, dimensions.height / 2])
+
+    // Create a path generator
+    const path = d3.geoPath().projection(projection)
+
+    // Load world map data
+    d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson")
+      .then((data: any) => {
+        if (!data || !data.features) {
+          throw new Error("Invalid map data format")
+        }
+
+        // Draw the map
+        g.selectAll("path")
+          .data(data.features)
+          .enter()
+          .append("path")
+          .attr("d", path as any)
+          .attr("fill", "#2C3440")
+          .attr("stroke", "#1A1F28")
+          .attr("stroke-width", 0.5)
+
+        // Draw QSO lines and markers
+        filteredQsos.forEach((qso, index) => {
+          const coords = getCoordinates(qso)
+          if (!coords) return
+
+          // Convert lat/lon to screen coordinates
+          const fromPoint = projection([coords.from[1], coords.from[0]])
+          const toPoint = projection([coords.to[1], coords.to[0]])
+
+          if (!fromPoint || !toPoint) {
+            console.warn("Could not project coordinates for QSO:", qso)
+            return
+          }
+
+          // Log the coordinates for debugging
+          console.log(`QSO from ${qso.MY_GRIDSQUARE} (${coords.from[0]}, ${coords.from[1]}) to ${qso.GRIDSQUARE} (${coords.to[0]}, ${coords.to[1]})`)
+          console.log(`Projected from (${fromPoint[0]}, ${fromPoint[1]}) to (${toPoint[0]}, ${toPoint[1]})`)
+
+          // Draw the line
+          g.append("line")
+            .attr("x1", fromPoint[0])
+            .attr("y1", fromPoint[1])
+            .attr("x2", toPoint[0])
+            .attr("y2", toPoint[1])
+            .attr("stroke", "#FF6B6B")
+            .attr("stroke-width", 1.5)
+            .attr("stroke-linecap", "round")
+            .style("cursor", "pointer")
+            .on("mouseenter", (event) => {
+              setSelectedQso(qso)
+              setTooltipPosition({ x: event.clientX, y: event.clientY })
+            })
+            .on("mouseleave", () => {
+              setSelectedQso(null)
+              setTooltipPosition(null)
+            })
+
+          // Draw the markers
+          g.append("circle")
+            .attr("cx", fromPoint[0])
+            .attr("cy", fromPoint[1])
+            .attr("r", 4)
+            .attr("fill", "#4CC9F0")
+            .attr("stroke", "#FFFFFF")
+            .attr("stroke-width", 1)
+
+          g.append("circle")
+            .attr("cx", toPoint[0])
+            .attr("cy", toPoint[1])
+            .attr("r", 4)
+            .attr("fill", "#F72585")
+            .attr("stroke", "#FFFFFF")
+            .attr("stroke-width", 1)
+        })
+      })
+      .catch(error => {
+        console.error("Error loading map data:", error)
+        // Add error message to the map
+        g.append("text")
+          .attr("x", dimensions.width / 2)
+          .attr("y", dimensions.height / 2)
+          .attr("text-anchor", "middle")
+          .attr("fill", "#FF6B6B")
+          .text("Error loading map data. Please try again.")
+      })
+  }, [filteredQsos, dimensions])
+
   return (
     <div className="space-y-4 w-full">
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -260,58 +354,13 @@ export function QsoMap() {
       </div>
 
       <div className="relative border rounded-lg overflow-hidden bg-background" style={{ height: "70vh" }}>
-        <ComposableMap
-          projection="geoMercator"
-          projectionConfig={{
-            scale: 150,
-            center: [0, 20], // Center the map to show more of the northern hemisphere
-          }}
-          style={{ width: "100%", height: "100%" }}
-        >
-          <Geographies geography={geoUrl}>
-            {({ geographies }) =>
-              geographies.map((geo) => (
-                <Geography key={geo.rsmKey} geography={geo} fill="#2C3440" stroke="#1A1F28" strokeWidth={0.5} />
-              ))
-            }
-          </Geographies>
-
-          {filteredQsos.map((qso, index) => {
-            const coords = getCoordinates(qso)
-            if (!coords) return null
-
-            // Log the coordinates for debugging
-            console.log(`Rendering QSO line from ${coords.from} to ${coords.to}`)
-
-            return (
-              <g key={index}>
-                <Line
-                  from={coords.from}
-                  to={coords.to}
-                  stroke="#FF6B6B"
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                  strokeDasharray="none"
-                  onMouseEnter={(e) => {
-                    setSelectedQso(qso)
-                    setTooltipPosition({ x: e.clientX, y: e.clientY })
-                  }}
-                  onMouseLeave={() => {
-                    setSelectedQso(null)
-                    setTooltipPosition(null)
-                  }}
-                  style={{ cursor: "pointer" }}
-                />
-                <Marker coordinates={coords.from}>
-                  <circle r={4} fill="#4CC9F0" stroke="#FFFFFF" strokeWidth={1} />
-                </Marker>
-                <Marker coordinates={coords.to}>
-                  <circle r={4} fill="#F72585" stroke="#FFFFFF" strokeWidth={1} />
-                </Marker>
-              </g>
-            )
-          })}
-        </ComposableMap>
+        <svg 
+          ref={svgRef} 
+          width="100%" 
+          height="100%" 
+          viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
+          preserveAspectRatio="xMidYMid meet"
+        />
 
         {selectedQso && tooltipPosition && (
           <div
@@ -367,4 +416,4 @@ export function QsoMap() {
       </div>
     </div>
   )
-}
+} 
