@@ -25,12 +25,12 @@ cd qso-map
 
 2. Install dependencies:
 ```bash
-pnpm install
+npm install
 ```
 
 3. Run the development server:
 ```bash
-pnpm dev
+npm dev
 ```
 
 The application will be available at [http://localhost:3000](http://localhost:3000).
@@ -40,13 +40,13 @@ The application will be available at [http://localhost:3000](http://localhost:30
 To create a production build:
 
 ```bash
-pnpm build
+npm build
 ```
 
 To start the production server:
 
 ```bash
-pnpm start
+npm start
 ```
 
 ## Project Structure
@@ -70,10 +70,10 @@ pnpm start
 
 ## Development
 
-- `pnpm dev` - Start development server
-- `pnpm build` - Create production build
-- `pnpm start` - Start production server
-- `pnpm lint` - Run linting
+- `npm dev` - Start development server
+- `npm build` - Create production build
+- `npm start` - Start production server
+- `npm lint` - Run linting
 
 ## License
 
