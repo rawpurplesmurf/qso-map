@@ -39,12 +39,34 @@ function gridToLatLon(grid: string): [number, number] | null {
   if (!grid || grid.length < 4) return null
 
   try {
-    // Basic grid square conversion (this is simplified)
-    const lon = -180 + ((grid.charCodeAt(0) - 65) * 20 + Number.parseInt(grid.charAt(2)) * 2)
-    const lat = -90 + ((grid.charCodeAt(1) - 65) * 10 + Number.parseInt(grid.charAt(3)))
-
+    // Convert Maidenhead grid square to lat/lon
+    // Format: AA11aa (e.g., CN86RX)
+    // First two letters: A=0-17, a=0-17 (longitude/latitude fields)
+    // First two numbers: 0-9 (longitude/latitude sub-fields)
+    // Last two letters: x=0-24, x=0-24 (longitude/latitude sub-sub-fields)
+    
+    // Extract components
+    const A = grid.charCodeAt(0) - 65 // First letter (0-17)
+    const a = grid.charCodeAt(1) - 65 // Second letter (0-17)
+    const B = parseInt(grid.charAt(2)) // First number (0-9)
+    const b = parseInt(grid.charAt(3)) // Second number (0-9)
+    
+    // For 6-character grid squares (e.g., CN86RX)
+    let x = 0, y = 0
+    if (grid.length >= 6) {
+      x = grid.charCodeAt(4) - 65 // Fifth character (0-24)
+      y = grid.charCodeAt(5) - 65 // Sixth character (0-24)
+    }
+    
+    // Calculate longitude
+    const lon = -180 + (A * 20) + (B * 2) + (x * 5/60)
+    
+    // Calculate latitude
+    const lat = -90 + (a * 10) + b + (y * 2.5/60)
+    
     return [lat, lon]
   } catch (e) {
+    console.warn("Error converting grid square:", grid, e)
     return null
   }
 }
@@ -107,7 +129,11 @@ export function QsoMap() {
               return null
             }
             try {
-              return parse(qso.QSO_DATE, "yyyyMMdd", new Date())
+              // Parse date in YYYYMMDD format
+              const year = parseInt(qso.QSO_DATE.substring(0, 4))
+              const month = parseInt(qso.QSO_DATE.substring(4, 6)) - 1 // JS months are 0-indexed
+              const day = parseInt(qso.QSO_DATE.substring(6, 8))
+              return new Date(year, month, day)
             } catch (error) {
               console.warn("Invalid QSO_DATE format:", qso.QSO_DATE, "in QSO:", qso)
               return null
@@ -140,7 +166,12 @@ export function QsoMap() {
   const filteredQsos = qsos.filter((qso) => {
     if (!qso.QSO_DATE) return false
     try {
-      const qsoDate = parse(qso.QSO_DATE, "yyyyMMdd", new Date())
+      // Parse date in YYYYMMDD format
+      const year = parseInt(qso.QSO_DATE.substring(0, 4))
+      const month = parseInt(qso.QSO_DATE.substring(4, 6)) - 1 // JS months are 0-indexed
+      const day = parseInt(qso.QSO_DATE.substring(6, 8))
+      const qsoDate = new Date(year, month, day)
+      
       // Check if the QSO date matches the current selected date
       return qsoDate.toDateString() === currentRange[0].toDateString()
     } catch (e) {
@@ -166,37 +197,23 @@ export function QsoMap() {
 
   // Get coordinates for a QSO
   const getCoordinates = (qso: QSO): { from: [number, number]; to: [number, number] } | null => {
-    let fromCoords: [number, number] | null = null
-    let toCoords: [number, number] | null = null
+    // Get your station's coordinates from MY_GRIDSQUARE
+    const fromCoords = qso.MY_GRIDSQUARE ? gridToLatLon(qso.MY_GRIDSQUARE) : null
 
-    // Try to get coordinates from LAT/LON fields
-    if (qso.MY_LAT && qso.MY_LON) {
-      fromCoords = parseLatLon(qso.MY_LAT, qso.MY_LON)
-    }
+    // Get the contacted station's coordinates from GRIDSQUARE
+    const toCoords = qso.GRIDSQUARE ? gridToLatLon(qso.GRIDSQUARE) : null
 
-    // If not available, try grid square
-    if (!fromCoords && qso.MY_GRIDSQUARE) {
-      fromCoords = gridToLatLon(qso.MY_GRIDSQUARE)
-    }
-
-    // Default to a location if we can't determine it
-    if (!fromCoords) {
-      // Default to a location in the US (since the example shows US station)
-      fromCoords = [47.0, -122.0] // Approximate location for WA, USA
-    }
-
-    // Try to get coordinates for the contacted station
-    if (qso.LAT && qso.LON) {
-      toCoords = parseLatLon(qso.LAT, qso.LON)
-    }
-
-    // If not available, try grid square
-    if (!toCoords && qso.GRIDSQUARE) {
-      toCoords = gridToLatLon(qso.GRIDSQUARE)
-    }
-
+    // If we have both coordinates, return them
     if (fromCoords && toCoords) {
       return { from: fromCoords, to: toCoords }
+    }
+
+    // Log missing grid squares for debugging
+    if (!fromCoords) {
+      console.warn("Missing or invalid MY_GRIDSQUARE:", qso.MY_GRIDSQUARE, "for QSO:", qso)
+    }
+    if (!toCoords) {
+      console.warn("Missing or invalid GRIDSQUARE:", qso.GRIDSQUARE, "for QSO:", qso)
     }
 
     return null
@@ -297,7 +314,19 @@ export function QsoMap() {
             <Card>
               <CardContent className="p-3 text-xs space-y-1">
                 <div className="font-bold text-sm">{selectedQso.CALL}</div>
-                <div>Date: {format(parse(selectedQso.QSO_DATE, "yyyyMMdd", new Date()), "MMM d, yyyy")}</div>
+                <div>Date: {
+                  (() => {
+                    try {
+                      const year = parseInt(selectedQso.QSO_DATE.substring(0, 4))
+                      const month = parseInt(selectedQso.QSO_DATE.substring(4, 6)) - 1
+                      const day = parseInt(selectedQso.QSO_DATE.substring(6, 8))
+                      const date = new Date(year, month, day)
+                      return format(date, "MMM d, yyyy")
+                    } catch (e) {
+                      return "Invalid date"
+                    }
+                  })()
+                }</div>
                 <div>Time: {selectedQso.TIME_ON.replace(/(\d{2})(\d{2})(\d{2})/, "$1:$2:$3")}</div>
                 <div>
                   Band: {selectedQso.BAND} - Mode: {selectedQso.MODE}
