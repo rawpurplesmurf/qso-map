@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import * as d3 from "d3"
 import { format } from "date-fns"
-import { Info } from "lucide-react"
+import { Info, X, ZoomIn, ZoomOut, Maximize2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -83,6 +83,10 @@ export function QsoMapD3() {
   const [selectedQso, setSelectedQso] = useState<QSO | null>(null)
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
+  const [zoom, setZoom] = useState(1)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [translate, setTranslate] = useState<[number, number]>([0, 0])
 
   useEffect(() => {
     // Get QSO data from sessionStorage
@@ -215,6 +219,62 @@ export function QsoMapD3() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  // Handle zoom and pan
+  const handleWheel = (event: WheelEvent) => {
+    event.preventDefault()
+    const delta = event.deltaY
+    const zoomFactor = delta > 0 ? 0.9 : 1.1
+    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.5), 5)
+    setZoom(newZoom)
+  }
+
+  const handleMouseDown = (event: React.MouseEvent) => {
+    setIsDragging(true)
+    setDragStart({ x: event.clientX, y: event.clientY })
+  }
+
+  const handleMouseMove = (event: React.MouseEvent) => {
+    if (!isDragging || !dragStart) return
+    const dx = event.clientX - dragStart.x
+    const dy = event.clientY - dragStart.y
+    setTranslate([translate[0] + dx, translate[1] + dy])
+    setDragStart({ x: event.clientX, y: event.clientY })
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+    setDragStart(null)
+  }
+
+  // Add event listeners for zoom and pan
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+
+    svg.addEventListener('wheel', handleWheel as any)
+    return () => {
+      svg.removeEventListener('wheel', handleWheel as any)
+    }
+  }, [zoom])
+
+  // Handle zoom controls
+  const handleZoomIn = () => {
+    setZoom(prev => Math.min(prev * 1.2, 5))
+  }
+
+  const handleZoomOut = () => {
+    setZoom(prev => Math.max(prev / 1.2, 0.5))
+  }
+
+  const handleZoomReset = () => {
+    setZoom(1)
+    setTranslate([0, 0])
+  }
+
+  const handleZoomSliderChange = (value: number[]) => {
+    setZoom(value[0])
+  }
+
   // Render the map using D3
   useEffect(() => {
     if (!svgRef.current || filteredQsos.length === 0) return
@@ -225,11 +285,12 @@ export function QsoMapD3() {
     // Create SVG group for the map
     const svg = d3.select(svgRef.current)
     const g = svg.append("g")
+      .attr("transform", `translate(${translate[0]},${translate[1]}) scale(${zoom})`)
 
     // Create a projection that better fits the world map
     const projection = d3.geoMercator()
-      .scale(200)  // Increased scale for better detail
-      .center([0, 30])  // Adjusted center to focus on northern hemisphere
+      .scale(200)
+      .center([0, 30])
       .translate([dimensions.width / 2, dimensions.height / 2])
 
     // Create a path generator
@@ -238,78 +299,90 @@ export function QsoMapD3() {
     // Load world map data
     d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson")
       .then((data: any) => {
-        if (!data || !data.features) {
+        if (!data || !data.features || !Array.isArray(data.features)) {
           throw new Error("Invalid map data format")
         }
 
-        // Draw the map
-        g.selectAll("path")
-          .data(data.features)
-          .enter()
-          .append("path")
-          .attr("d", path as any)
-          .attr("fill", "#2C3440")
-          .attr("stroke", "#1A1F28")
-          .attr("stroke-width", 0.5)
-
-        // Draw QSO lines and markers
-        filteredQsos.forEach((qso, index) => {
-          const coords = getCoordinates(qso)
-          if (!coords) return
-
-          // Convert lat/lon to screen coordinates
-          const fromPoint = projection([coords.from[1], coords.from[0]])
-          const toPoint = projection([coords.to[1], coords.to[0]])
-
-          if (!fromPoint || !toPoint) {
-            console.warn("Could not project coordinates for QSO:", qso)
-            return
-          }
-
-          // Log the coordinates for debugging
-          console.log(`QSO from ${qso.MY_GRIDSQUARE} (${coords.from[0]}, ${coords.from[1]}) to ${qso.GRIDSQUARE} (${coords.to[0]}, ${coords.to[1]})`)
-          console.log(`Projected from (${fromPoint[0]}, ${fromPoint[1]}) to (${toPoint[0]}, ${toPoint[1]})`)
-
-          // Draw the line
-          g.append("line")
-            .attr("x1", fromPoint[0])
-            .attr("y1", fromPoint[1])
-            .attr("x2", toPoint[0])
-            .attr("y2", toPoint[1])
-            .attr("stroke", "#FF6B6B")
-            .attr("stroke-width", 1.5)
-            .attr("stroke-linecap", "round")
-            .style("cursor", "pointer")
-            .on("mouseenter", (event) => {
-              setSelectedQso(qso)
-              setTooltipPosition({ x: event.clientX, y: event.clientY })
+        try {
+          // Draw the map
+          g.selectAll("path")
+            .data(data.features)
+            .enter()
+            .append("path")
+            .attr("d", (d: any) => {
+              try {
+                return path(d) || ""
+              } catch (e) {
+                console.warn("Error generating path for feature:", e)
+                return ""
+              }
             })
-            .on("mouseleave", () => {
-              setSelectedQso(null)
-              setTooltipPosition(null)
-            })
+            .attr("fill", "#2C3440")
+            .attr("stroke", "#1A1F28")
+            .attr("stroke-width", 0.5)
 
-          // Draw the markers
-          g.append("circle")
-            .attr("cx", fromPoint[0])
-            .attr("cy", fromPoint[1])
-            .attr("r", 4)
-            .attr("fill", "#4CC9F0")
-            .attr("stroke", "#FFFFFF")
-            .attr("stroke-width", 1)
+          // Draw QSO lines and markers
+          filteredQsos.forEach((qso, index) => {
+            const coords = getCoordinates(qso)
+            if (!coords) return
 
-          g.append("circle")
-            .attr("cx", toPoint[0])
-            .attr("cy", toPoint[1])
-            .attr("r", 4)
-            .attr("fill", "#F72585")
-            .attr("stroke", "#FFFFFF")
-            .attr("stroke-width", 1)
-        })
+            // Convert lat/lon to screen coordinates
+            const fromPoint = projection([coords.from[1], coords.from[0]])
+            const toPoint = projection([coords.to[1], coords.to[0]])
+
+            if (!fromPoint || !toPoint) {
+              console.warn("Could not project coordinates for QSO:", qso)
+              return
+            }
+
+            // Draw the line
+            g.append("line")
+              .attr("x1", fromPoint[0])
+              .attr("y1", fromPoint[1])
+              .attr("x2", toPoint[0])
+              .attr("y2", toPoint[1])
+              .attr("stroke", "#FF6B6B")
+              .attr("stroke-width", 1.5)
+              .attr("stroke-linecap", "round")
+              .style("cursor", "pointer")
+              .on("mouseenter", (event) => {
+                setSelectedQso(qso)
+                setTooltipPosition({ x: event.clientX, y: event.clientY })
+              })
+              .on("mouseleave", () => {
+                setSelectedQso(null)
+                setTooltipPosition(null)
+              })
+
+            // Draw the markers
+            g.append("circle")
+              .attr("cx", fromPoint[0])
+              .attr("cy", fromPoint[1])
+              .attr("r", 4)
+              .attr("fill", "#4CC9F0")
+              .attr("stroke", "#FFFFFF")
+              .attr("stroke-width", 1)
+
+            g.append("circle")
+              .attr("cx", toPoint[0])
+              .attr("cy", toPoint[1])
+              .attr("r", 4)
+              .attr("fill", "#F72585")
+              .attr("stroke", "#FFFFFF")
+              .attr("stroke-width", 1)
+          })
+        } catch (error) {
+          console.error("Error rendering map:", error)
+          g.append("text")
+            .attr("x", dimensions.width / 2)
+            .attr("y", dimensions.height / 2)
+            .attr("text-anchor", "middle")
+            .attr("fill", "#FF6B6B")
+            .text("Error rendering map. Please try again.")
+        }
       })
       .catch(error => {
         console.error("Error loading map data:", error)
-        // Add error message to the map
         g.append("text")
           .attr("x", dimensions.width / 2)
           .attr("y", dimensions.height / 2)
@@ -317,7 +390,7 @@ export function QsoMapD3() {
           .attr("fill", "#FF6B6B")
           .text("Error loading map data. Please try again.")
       })
-  }, [filteredQsos, dimensions])
+  }, [filteredQsos, dimensions, zoom, translate])
 
   return (
     <div className="space-y-4 w-full">
@@ -353,55 +426,118 @@ export function QsoMapD3() {
         </div>
       </div>
 
-      <div className="relative border rounded-lg overflow-hidden bg-background" style={{ height: "70vh" }}>
-        <svg 
-          ref={svgRef} 
-          width="100%" 
-          height="100%" 
-          viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
-          preserveAspectRatio="xMidYMid meet"
-        />
+      <div className="flex flex-col gap-4">
+        <div 
+          className="relative border rounded-lg overflow-hidden bg-background" 
+          style={{ height: "70vh" }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <svg 
+            ref={svgRef} 
+            width="100%" 
+            height="100%" 
+            viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
+            preserveAspectRatio="xMidYMid meet"
+            style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+          />
 
-        {selectedQso && tooltipPosition && (
-          <div
-            className="absolute z-50 w-64"
-            style={{
-              left: tooltipPosition.x,
-              top: tooltipPosition.y,
-              transform: "translate(-50%, -100%)",
-            }}
-          >
-            <Card>
-              <CardContent className="p-3 text-xs space-y-1">
-                <div className="font-bold text-sm">{selectedQso.CALL}</div>
-                <div>Date: {
-                  (() => {
-                    try {
-                      const year = parseInt(selectedQso.QSO_DATE.substring(0, 4))
-                      const month = parseInt(selectedQso.QSO_DATE.substring(4, 6)) - 1
-                      const day = parseInt(selectedQso.QSO_DATE.substring(6, 8))
-                      const date = new Date(year, month, day)
-                      return format(date, "MMM d, yyyy")
-                    } catch (e) {
-                      return "Invalid date"
-                    }
-                  })()
-                }</div>
-                <div>Time: {selectedQso.TIME_ON.replace(/(\d{2})(\d{2})(\d{2})/, "$1:$2:$3")}</div>
-                <div>
-                  Band: {selectedQso.BAND} - Mode: {selectedQso.MODE}
-                </div>
-                {selectedQso.NAME && <div>Name: {selectedQso.NAME}</div>}
-                {selectedQso.QTH && <div>QTH: {selectedQso.QTH}</div>}
-                {selectedQso.COUNTRY && <div>Country: {selectedQso.COUNTRY}</div>}
-                {selectedQso.COMMENT && <div>Comment: {selectedQso.COMMENT}</div>}
-                <div>
-                  RST: {selectedQso.RST_SENT}/{selectedQso.RST_RCVD}
-                </div>
-              </CardContent>
-            </Card>
+          {/* Zoom Controls */}
+          <div className="absolute bottom-4 right-4 flex flex-col gap-2 bg-background/80 p-2 rounded-lg border">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleZoomIn}
+            >
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleZoomOut}
+            >
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleZoomReset}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </Button>
           </div>
-        )}
+
+          {/* Zoom Slider */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-48 bg-background/80 p-2 rounded-lg border">
+            <Slider
+              value={[zoom]}
+              onValueChange={handleZoomSliderChange}
+              min={0.5}
+              max={5}
+              step={0.1}
+              className="w-full"
+            />
+          </div>
+
+          {selectedQso && tooltipPosition && (
+            <div
+              className="absolute z-50 w-64"
+              style={{
+                left: tooltipPosition.x,
+                top: tooltipPosition.y,
+                transform: "translate(-50%, -100%)",
+              }}
+            >
+              <Card>
+                <CardContent className="p-3 text-xs space-y-1">
+                  <div className="flex justify-between items-start">
+                    <div className="font-bold text-sm">{selectedQso.CALL}</div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-4 w-4 p-0"
+                      onClick={() => {
+                        setSelectedQso(null)
+                        setTooltipPosition(null)
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                  <div>Date: {
+                    (() => {
+                      try {
+                        const year = parseInt(selectedQso.QSO_DATE.substring(0, 4))
+                        const month = parseInt(selectedQso.QSO_DATE.substring(4, 6)) - 1
+                        const day = parseInt(selectedQso.QSO_DATE.substring(6, 8))
+                        const date = new Date(year, month, day)
+                        return format(date, "MMM d, yyyy")
+                      } catch (e) {
+                        return "Invalid date"
+                      }
+                    })()
+                  }</div>
+                  <div>Time: {selectedQso.TIME_ON.replace(/(\d{2})(\d{2})(\d{2})/, "$1:$2:$3")}</div>
+                  <div>
+                    Band: {selectedQso.BAND} - Mode: {selectedQso.MODE}
+                  </div>
+                  {selectedQso.NAME && <div>Name: {selectedQso.NAME}</div>}
+                  {selectedQso.QTH && <div>QTH: {selectedQso.QTH}</div>}
+                  {selectedQso.COUNTRY && <div>Country: {selectedQso.COUNTRY}</div>}
+                  {selectedQso.COMMENT && <div>Comment: {selectedQso.COMMENT}</div>}
+                  <div>
+                    RST: {selectedQso.RST_SENT}/{selectedQso.RST_RCVD}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex justify-between text-sm text-muted-foreground">
@@ -412,6 +548,9 @@ export function QsoMapD3() {
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full bg-[#F72585]"></div>
           <span>Contacted stations</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm">Zoom: {Math.round(zoom * 100)}%</span>
         </div>
       </div>
     </div>
