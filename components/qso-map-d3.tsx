@@ -82,6 +82,8 @@ export function QsoMapD3() {
   const [sliderValue, setSliderValue] = useState<number[]>([0])
   const [selectedQso, setSelectedQso] = useState<QSO | null>(null)
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null)
+  const [tooltipTimeout, setTooltipTimeout] = useState<NodeJS.Timeout | null>(null)
+  const [isSliderMoving, setIsSliderMoving] = useState(false)
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
   const [zoom, setZoom] = useState(1)
   const [isDragging, setIsDragging] = useState(false)
@@ -167,6 +169,7 @@ export function QsoMapD3() {
   // Handle slider change
   const handleSliderChange = (value: number[]) => {
     setSliderValue(value)
+    setIsSliderMoving(true)
 
     if (dateRange[0] && dateRange[1]) {
       const percentage = value[0]
@@ -177,6 +180,18 @@ export function QsoMapD3() {
       selectedDate.setDate(selectedDate.getDate() + selectedDay)
       setCurrentRange([selectedDate, selectedDate])
     }
+
+    // Clear any existing tooltip
+    if (tooltipTimeout) {
+      clearTimeout(tooltipTimeout)
+    }
+    setSelectedQso(null)
+    setTooltipPosition(null)
+  }
+
+  // Add slider end handler
+  const handleSliderEnd = () => {
+    setIsSliderMoving(false)
   }
 
   // Get coordinates for a QSO
@@ -346,10 +361,23 @@ export function QsoMapD3() {
               .attr("stroke-linecap", "round")
               .style("cursor", "pointer")
               .on("mouseenter", (event) => {
-                setSelectedQso(qso)
-                setTooltipPosition({ x: event.clientX, y: event.clientY })
+                if (isSliderMoving) return
+                
+                if (tooltipTimeout) {
+                  clearTimeout(tooltipTimeout)
+                }
+                
+                const timeout = setTimeout(() => {
+                  setSelectedQso(qso)
+                  setTooltipPosition({ x: event.clientX, y: event.clientY })
+                }, 100)
+                
+                setTooltipTimeout(timeout)
               })
               .on("mouseleave", () => {
+                if (tooltipTimeout) {
+                  clearTimeout(tooltipTimeout)
+                }
                 setSelectedQso(null)
                 setTooltipPosition(null)
               })
@@ -403,7 +431,13 @@ export function QsoMapD3() {
             {format(currentRange[0], "MMM d, yyyy")}
           </span>
           <div className="w-48 md:w-80">
-            <Slider value={sliderValue} onValueChange={handleSliderChange} max={100} step={1} />
+            <Slider 
+              value={sliderValue} 
+              onValueChange={handleSliderChange} 
+              onValueCommit={handleSliderEnd}
+              max={100} 
+              step={1} 
+            />
           </div>
           <span className="text-sm text-muted-foreground whitespace-nowrap">
             {format(currentRange[1], "MMM d, yyyy")}
